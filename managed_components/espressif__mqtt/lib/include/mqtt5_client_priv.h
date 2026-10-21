@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -8,7 +8,6 @@
 #define _MQTT5_CLIENT_PRIV_H_
 
 #include "mqtt5_client.h"
-#include "mqtt_client_priv.h"
 #include "mqtt5_msg.h"
 
 #ifdef __cplusplus
@@ -45,10 +44,12 @@ void esp_mqtt5_parse_suback(esp_mqtt5_client_handle_t client);
 void esp_mqtt5_parse_disconnect(esp_mqtt5_client_handle_t client, int *disconnect_rsp_code);
 esp_err_t esp_mqtt5_parse_connack(esp_mqtt5_client_handle_t client, int *connect_rsp_code);
 void esp_mqtt5_client_destory(esp_mqtt5_client_handle_t client);
+esp_err_t esp_mqtt5_client_check_inflight_maximum(esp_mqtt5_client_handle_t client);
 esp_err_t esp_mqtt5_client_publish_check(esp_mqtt5_client_handle_t client, int qos, int retain);
 esp_err_t esp_mqtt5_client_subscribe_check(esp_mqtt5_client_handle_t client, int qos);
 esp_err_t esp_mqtt5_create_default_config(esp_mqtt5_client_handle_t client);
-esp_err_t esp_mqtt5_get_publish_data(esp_mqtt5_client_handle_t client, uint8_t *msg_buf, size_t msg_read_len, char **msg_topic, size_t *msg_topic_len, char **msg_data, size_t *msg_data_len);
+esp_err_t esp_mqtt5_get_publish_data(esp_mqtt5_client_handle_t client, uint8_t *msg_buf, size_t msg_read_len,
+                                     char **msg_topic, size_t *msg_topic_len, char **msg_data, size_t *msg_data_len);
 #ifdef __cplusplus
 }
 #endif //__cplusplus

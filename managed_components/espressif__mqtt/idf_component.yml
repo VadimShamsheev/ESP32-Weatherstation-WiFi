@@ -8,11 +8,14 @@ issues: https://github.com/espressif/esp-mqtt/issues
 license: Apache-2.0
 maintainers:
 - Espressif Systems <support@espressif.com>
-repository: https://github.com/espressif/esp-mqtt
+repository: git://github.com/espressif/esp-mqtt.git
+repository_info:
+  commit_sha: 1a1e5788a5cf57a0f44a3c6c061407f6c9be1026
+  path: .
 tags:
 - mqtt
 - mqtt5
 - protocol
 - networking
 url: https://github.com/espressif/esp-mqtt
-version: 1.0.0
+version: 1.1.0

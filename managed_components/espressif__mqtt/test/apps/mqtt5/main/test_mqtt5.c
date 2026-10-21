@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -14,7 +14,6 @@
 #include "test_mqtt5_client_broker.h"
 #include "test_mqtt_connection.h"
 #include "esp_partition.h"
-
 
 TEST_GROUP(mqtt5);
 
@@ -43,7 +42,7 @@ TEST(mqtt5, init_with_invalid_url)
         .session.protocol_ver = MQTT_PROTOCOL_V_5,
     };
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt5_cfg);
-    TEST_ASSERT_EQUAL(NULL, client );
+    TEST_ASSERT_EQUAL(NULL, client);
 }
 
 TEST(mqtt5, init_and_deinit)
@@ -54,7 +53,7 @@ TEST(mqtt5, init_and_deinit)
         .session.protocol_ver = MQTT_PROTOCOL_V_5,
         .credentials.username = "123",
         .credentials.authentication.password = "456",
-        .session.last_will.topic = "/topic/will",
+        .session.last_will.topic = "topic/will",
         .session.last_will.msg = "i will leave",
         .session.last_will.msg_len = 12,
         .session.last_will.qos = 1,
@@ -71,18 +70,17 @@ TEST(mqtt5, init_and_deinit)
         .payload_format_indicator = true,
         .message_expiry_interval = 10,
         .content_type = "json",
-        .response_topic = "/test/response",
+        .response_topic = "test/response",
         .correlation_data = "123456",
         .correlation_data_len = 6,
     };
-
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt5_cfg);
     esp_mqtt5_client_set_user_property(&connect_property.user_property, user_property_arr, 3);
     esp_mqtt5_client_set_user_property(&connect_property.will_user_property, user_property_arr, 3);
     esp_mqtt5_client_set_connect_property(client, &connect_property);
     esp_mqtt5_client_delete_user_property(connect_property.user_property);
     esp_mqtt5_client_delete_user_property(connect_property.will_user_property);
-    TEST_ASSERT_NOT_EQUAL(NULL, client );
+    TEST_ASSERT_NOT_EQUAL(NULL, client);
     esp_mqtt_client_destroy(client);
 }
 
@@ -98,7 +96,7 @@ static const char *this_bin_addr(void)
 TEST(mqtt5, enqueue_and_destroy_outbox)
 {
     const char *bin_addr = this_bin_addr();
-    // Reseting leak detection since this_bin_addr adds to allocated memory.
+    // Resetting leak detection since this_bin_addr adds to allocated memory.
     test_utils_record_free_mem();
     TEST_ESP_OK(test_utils_set_leak_level(0, ESP_LEAK_TYPE_CRITICAL, ESP_COMP_LEAK_GENERAL));
     const int messages = 20;
@@ -112,14 +110,15 @@ TEST(mqtt5, enqueue_and_destroy_outbox)
         .payload_format_indicator = 1,
         .message_expiry_interval = 1000,
         .topic_alias = 0,
-        .response_topic = "/topic/test/response",
+        .response_topic = "topic/test/response",
         .correlation_data = "123456",
         .correlation_data_len = 6,
         .content_type = "json",
     };
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt5_cfg);
-    TEST_ASSERT_NOT_EQUAL(NULL, client );
+    TEST_ASSERT_NOT_EQUAL(NULL, client);
     int bytes_before = esp_get_free_heap_size();
+
     for (int i = 0; i < messages; i ++) {
         esp_mqtt5_client_set_user_property(&publish_property.user_property, user_property_arr, 3);
         esp_mqtt5_client_set_publish_property(client, &publish_property);
@@ -127,27 +126,26 @@ TEST(mqtt5, enqueue_and_destroy_outbox)
         esp_mqtt5_client_delete_user_property(publish_property.user_property);
         publish_property.user_property = NULL;
     }
+
     int bytes_after = esp_get_free_heap_size();
     // check that outbox allocated all messages on heap
     TEST_ASSERT_GREATER_OR_EQUAL(messages * size, bytes_before - bytes_after);
-
     esp_mqtt_client_destroy(client);
 }
 
 #if SOC_EMAC_SUPPORTED
 /**
- * This test cases uses ethernet kit, so build and use it only if EMAC supported
+ * This test cases uses ethernet kit, so build and use it only if EMACS supported
  */
 TEST(mqtt5, broker_tests)
 {
     test_case_uses_tcpip();
     connect_test_fixture_setup();
-
     RUN_MQTT5_BROKER_TEST(mqtt5_connect_disconnect);
     RUN_MQTT5_BROKER_TEST(mqtt5_subscribe_publish);
     RUN_MQTT5_BROKER_TEST(mqtt5_lwt_clean_disconnect);
     RUN_MQTT5_BROKER_TEST(mqtt5_subscribe_payload);
-
+    RUN_MQTT5_BROKER_TEST(mqtt5_server_properties);
     connect_test_fixture_teardown();
 }
 #endif // SOC_EMAC_SUPPORTED
@@ -158,13 +156,11 @@ TEST_GROUP_RUNNER(mqtt5)
     RUN_TEST_CASE(mqtt5, init_with_invalid_url);
     RUN_TEST_CASE(mqtt5, init_and_deinit);
     RUN_TEST_CASE(mqtt5, enqueue_and_destroy_outbox);
-
 #if SOC_EMAC_SUPPORTED
     RUN_TEST_CASE(mqtt5, broker_tests);
 #endif // SOC_EMAC_SUPPORTED
 #endif //!DISABLED_FOR_TARGETS(ESP32H2)
 }
-
 
 void app_main(void)
 {

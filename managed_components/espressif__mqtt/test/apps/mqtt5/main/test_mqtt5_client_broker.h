@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -19,7 +19,6 @@
         TEST_ASSERT_TRUE_MESSAGE(test_name(), "Mqtt5 test failed: " #test_name "() "); \
         ESP_LOGI("mqtt5_test", "Test:" #test_name "() passed ");                       \
     } while(0)
-
 
 /**
  * @brief This module contains mqtt5 test cases interacting the client with a (real) broker
@@ -49,3 +48,9 @@ bool mqtt5_lwt_clean_disconnect(void);
  * and verifies the qos in SUBACK message from the broker.
  */
 bool mqtt5_subscribe_payload(void);
+
+/**
+ * @brief The client connects and verifies that server response
+ * properties from CONNACK are available in the CONNECTED event.
+ */
+bool mqtt5_server_properties(void);

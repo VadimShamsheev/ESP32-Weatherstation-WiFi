@@ -63,7 +63,6 @@ examples/ssl_ds:
         - if: IDF_TARGET == IDF_TARGET
           reason: Advanced feature demonstration, only build
 
-# Custom outbox implementation example
 examples/custom_outbox:
     <<: *default_rules
     disable_test:
@@ -94,6 +93,16 @@ test/apps/publish_connect_test:
     enable:
         - if: IDF_TARGET in ["esp32"]
           reason: Integration test for publish/connect functionality
+    disable_test:
+        - if: IDF_TARGET != "esp32"
+          temporary: false
+          reason: Only esp32 target has ethernet runners for integration tests
+
+# MQTT conformance integration test
+test/apps/mqtt_conformance:
+    enable:
+        - if: IDF_TARGET in ["esp32"]
+          reason: Integration test for conformance scenarios
     disable_test:
         - if: IDF_TARGET != "esp32"
           temporary: false

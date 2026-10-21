@@ -1,4 +1,9 @@
 /*
+ * SPDX-FileCopyrightText: 2025-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+/*
  * This file is subject to the terms and conditions defined in
  * file 'LICENSE', which is part of this source code package.
  * Tuan PM <tuanpm at live dot com>
@@ -149,6 +154,17 @@ typedef enum esp_mqtt_protocol_ver_t {
 } esp_mqtt_protocol_ver_t;
 
 /**
+ * States of MQTT client connection
+ */
+typedef enum esp_mqtt_client_connection_state_t {
+    MQTT_CLIENT_STATE_NOT_INITIALIZED = 0,  /*!< MQTT Client is not initialized */
+    MQTT_CLIENT_STATE_NOT_STARTED,          /*!< MQTT Client is initialized, but not started */
+    MQTT_CLIENT_STATE_DISCONNECTED,         /*!< MQTT Client is started, but not connected to the broker */
+    MQTT_CLIENT_STATE_CONNECTED,            /*!< MQTT Client is connected to the broker */
+    MQTT_CLIENT_STATE_WAITING_RECONNECT,    /*!< MQTT Client is waiting for reconnection request */
+} esp_mqtt_client_connection_state_t;
+
+/**
  * @brief *MQTT* error code structure to be passed as a contextual information
  * into ERROR event
  *
@@ -183,9 +199,7 @@ typedef struct esp_mqtt_error_codes {
     connect_return_code; /*!< connection refused error code reported from
                               *MQTT* broker on connection */
 #ifdef CONFIG_MQTT_PROTOCOL_5
-    esp_mqtt5_error_reason_code_t
-    disconnect_return_code; /*!< disconnection reason code reported from
-                              *MQTT* broker on disconnection */
+    esp_mqtt5_reason_code_t disconnect_return_code __attribute__((deprecated)); /*!<\deprecated disconnection reason code reported from *MQTT* broker on disconnection, deprecated - use reason_code in event instead */
 #endif
     /* tcp_transport extension */
     int esp_transport_sock_errno; /*!< errno from the underlying socket */
@@ -215,8 +229,10 @@ typedef struct esp_mqtt_event_t {
     bool retain; /*!< Retained flag of the message associated with this event */
     int qos;     /*!< QoS of the messages associated with this event */
     bool dup;    /*!< dup flag of the message associated with this event */
-    esp_mqtt_protocol_ver_t protocol_ver;   /*!< MQTT protocol version used for connection, defaults to value from menuconfig*/
+    esp_mqtt_protocol_ver_t
+    protocol_ver;   /*!< MQTT protocol version used for connection, defaults to value from menuconfig*/
 #ifdef CONFIG_MQTT_PROTOCOL_5
+    esp_mqtt5_reason_code_t reason_code; /*!< *MQTT* 5 reason code */
     esp_mqtt5_event_property_t *property; /*!< MQTT 5 property associated with this event */
 #endif
 
@@ -260,7 +276,8 @@ typedef struct esp_mqtt_client_config_t {
                          documentation for details. */
             esp_err_t (*crt_bundle_attach)(void *conf); /*!< Pointer to ESP x509 Certificate Bundle attach function for
                                                 the usage of certificate bundles. Client only attach the bundle, the clean up must be done by the user. */
-            const char *certificate; /*!< Certificate data, default is NULL. It's not copied nor freed by the client, user needs to clean up.*/
+            const char
+            *certificate; /*!< Certificate data, default is NULL. It's not copied nor freed by the client, user needs to clean up.*/
             size_t certificate_len; /*!< Length of the buffer pointed to by certificate. */
             const struct psk_key_hint *psk_hint_key; /*!< Pointer to PSK struct defined in esp_tls.h to enable PSK
                                              authentication (as alternative to certificate verification).
@@ -274,7 +291,7 @@ typedef struct esp_mqtt_client_config_t {
                                                                If NULL, server certificate CN must match hostname.
                                                                This is ignored if skip_cert_common_name_check=true.
                                                   It's not copied nor freed by the client, user needs to clean up.*/
-            const int *ciphersuites_list;    /*!< Pointer to a zero-terminated array of IANA identifiers of TLS cipher suites. 
+            const int *ciphersuites_list;    /*!< Pointer to a zero-terminated array of IANA identifiers of TLS cipher suites.
                                               Please ensure the validity of the list, and note that it is not copied or freed by the client. */
         } verification; /*!< Security verification of the broker */
     } broker; /*!< Broker address and security verification */
@@ -337,22 +354,23 @@ typedef struct esp_mqtt_client_config_t {
                         by default. Note: setting the config value `keepalive` to `0` doesn't disable
                         keepalive feature, but uses a default keepalive period */
         esp_mqtt_protocol_ver_t protocol_ver; /*!< *MQTT* protocol version used for connection.*/
-        int message_retransmit_timeout; /*!< timeout for retransmitting of failed packet */
+        int message_retransmit_timeout; /*!< timeout for retransmitting of failed packet, default: 1000 ms */
     } session; /*!< *MQTT* session configuration. */
     /**
      * Network related configuration
      */
     struct network_t {
-        int reconnect_timeout_ms; /*!< Reconnect to the broker after this value in miliseconds if auto reconnect is not
-                          disabled (defaults to 10s) */
+        int reconnect_timeout_ms; /*!< Reconnect to the broker after this value in milliseconds if auto reconnect is not
+                          disabled (default: 10000 ms) */
         int timeout_ms; /*!< Abort network operation if it is not completed after this value, in milliseconds
-                (defaults to 10s). */
+                (default: 10000 ms). */
         int refresh_connection_after_ms; /*!< Refresh connection after this value (in milliseconds) */
         bool disable_auto_reconnect;     /*!< Client will reconnect to server (when errors/disconnect). Set
                                  `disable_auto_reconnect=true` to disable */
         esp_transport_keep_alive_t tcp_keep_alive_cfg;  /*!< Transport keep-alive config*/
-        esp_transport_handle_t transport; /*!< Custom transport handle to use, leave it NULL to allow MQTT client create or recreate its own. Warning: The transport should be valid during the client lifetime and is destroyed when esp_mqtt_client_destroy is called. */
-        struct ifreq * if_name; /*!< The name of interface for data to go through. Use the default interface without setting */
+        esp_transport_handle_t
+        transport; /*!< Custom transport handle to use, leave it NULL to allow MQTT client create or recreate its own. Warning: The transport should be valid during the client lifetime and is destroyed when esp_mqtt_client_destroy is called. */
+        struct ifreq *if_name;  /*!< The name of interface for data to go through. Use the default interface without setting */
     } network; /*!< Network configuration */
     /**
      * Client task configuration
@@ -364,10 +382,10 @@ typedef struct esp_mqtt_client_config_t {
     /**
      * Client buffer size configuration
      *
-     * Client have two buffers for input and output respectivelly.
+     * Client have two buffers for input and output respectively.
      */
     struct buffer_t {
-        int size;     /*!< size of *MQTT* send/receive buffer*/
+        int size;     /*!< size of *MQTT* send/receive buffer, default: 1024*/
         int out_size; /*!< size of *MQTT* output buffer. If not defined, defaults to the size defined by
               ``buffer_size`` */
     } buffer; /*!< Buffer size configuration.*/
@@ -428,7 +446,7 @@ esp_err_t esp_mqtt_client_start(esp_mqtt_client_handle_t client);
  *
  * @return ESP_OK on success
  *         ESP_ERR_INVALID_ARG on wrong initialization
- *         ESP_FAIL if client is in invalid state
+ *         ESP_FAIL if client is not waiting for reconnection
  */
 esp_err_t esp_mqtt_client_reconnect(esp_mqtt_client_handle_t client);
 
@@ -550,8 +568,12 @@ int esp_mqtt_client_unsubscribe(esp_mqtt_client_handle_t client,
  * (10s) or if publishing payloads longer than internal buffer (due to message
  *   fragmentation)
  * - Client doesn't have to be connected for this API to work, enqueueing the
- * messages with qos>1 (returning -1 for all the qos=0 messages if
- * disconnected). If MQTT_SKIP_PUBLISH_IF_DISCONNECTED is enabled, this API will
+ * messages with qos>0 (returning -1 for all the qos=0 messages if
+ * disconnected).
+ * - In case of MQTT v5, if the server quota for inflight messages is exceeded,
+ *   message will be enqueued and sent later when quota is available.
+ * - QoS 0 messages are sent immediately in the calling task, not via the outbox.
+ * - If MQTT_SKIP_PUBLISH_IF_DISCONNECTED is enabled, this API will
  * not attempt to publish when the client is not connected and will always
  * return -1.
  * - It is thread safe, please refer to `esp_mqtt_client_subscribe` for details
@@ -579,6 +601,8 @@ int esp_mqtt_client_publish(esp_mqtt_client_handle_t client, const char *topic,
  * (in contrast to the esp_mqtt_client_publish() which sends the publish message
  * immediately in the user task's context). Thus, it could be used as a non
  * blocking version of esp_mqtt_client_publish().
+ * - When MQTT v5 inflight quota is exceeded, queued QoS 1/2 messages are held
+ *   in the outbox. QoS 0 messages enqueued with store=true are not affected.
  *
  * @param client    *MQTT* client handle
  * @param topic     topic string
@@ -614,7 +638,7 @@ esp_err_t esp_mqtt_client_destroy(esp_mqtt_client_handle_t client);
  * (i.e. on "before_connect" event
  *
  * Notes:
- * - When calling this function make sure to have all the intendend configurations
+ * - When calling this function make sure to have all the intended configurations
  *   set, otherwise default values are set.
  * @param client    *MQTT* client handle
  *
@@ -655,7 +679,8 @@ esp_err_t esp_mqtt_client_register_event(esp_mqtt_client_handle_t client,
  *         ESP_ERR_INVALID_ARG on invalid event ID
  *         ESP_OK on success
  */
-esp_err_t esp_mqtt_client_unregister_event(esp_mqtt_client_handle_t client, esp_mqtt_event_id_t event, esp_event_handler_t event_handler);
+esp_err_t esp_mqtt_client_unregister_event(esp_mqtt_client_handle_t client, esp_mqtt_event_id_t event,
+                                           esp_event_handler_t event_handler);
 
 /**
  * @brief Get outbox size
@@ -697,6 +722,19 @@ esp_err_t esp_mqtt_dispatch_custom_event(esp_mqtt_client_handle_t client, esp_mq
  *
 */
 esp_transport_handle_t esp_mqtt_client_get_transport(esp_mqtt_client_handle_t client, char *transport_scheme);
+
+/**
+ * @brief Get MQTT client's current state
+ *
+ * Get the current state of MQTT client. Returns a value to indicate whether is it initialized, connected, waiting for
+ * reconnection, or disconnected.
+ *
+ * @param client            *MQTT* client handle
+ * @return MQTT client state on success
+ *         MQTT_CLIENT_STATE_INVALID in case of error
+ */
+esp_mqtt_client_connection_state_t esp_mqtt_client_get_state(esp_mqtt_client_handle_t client);
+
 #ifdef __cplusplus
 }
 #endif //__cplusplus

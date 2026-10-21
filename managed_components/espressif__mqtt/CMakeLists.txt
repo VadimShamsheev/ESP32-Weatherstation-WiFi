@@ -1,4 +1,4 @@
-set(srcs mqtt_client.c lib/mqtt_msg.c lib/mqtt_outbox.c lib/platform_esp32_idf.c)
+set(srcs mqtt_client.c lib/mqtt_msg.c lib/platform_esp32_idf.c)
 
 if(CONFIG_MQTT_PROTOCOL_5)
     list(APPEND srcs lib/mqtt5_msg.c mqtt5_client.c)
@@ -12,3 +12,9 @@ idf_component_register(SRCS "${srcs}"
                     PRIV_REQUIRES esp_timer http_parser esp_hw_support heap
                     KCONFIG ${CMAKE_CURRENT_LIST_DIR}/Kconfig
                     )
+
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lib/mqtt_utils)
+target_link_libraries(${COMPONENT_LIB} PUBLIC idf::mqtt::utils)
+
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lib/mqtt_outbox)
+target_link_libraries(${COMPONENT_LIB} PRIVATE idf::mqtt::outbox)

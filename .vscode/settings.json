@@ -1,0 +1,5 @@
+{
+    "idf.currentSetup": "C:\\esp\\v6.0.1\\esp-idf",
+    "C_Cpp.default.compilerPath": "C:/mingw/w64devkit/bin/gcc.exe",
+    "idf.port": "COM3"
+}

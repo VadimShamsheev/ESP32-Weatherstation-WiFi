@@ -82,6 +82,7 @@ test/host/managed_components/
 # idf-ci generated files
 app_info_*.txt
 size_info_*.txt
+test_child_pipeline.yml
 compile_commands.json
 *.log
 
@@ -108,5 +109,6 @@ dist/
 build/
 *.egg-info/
 
-# CI/CD artifacts
+# CI/CD artifacts (idf-dynamic-pipeline / idf-ci generated)
 build_child_pipeline.yml
+test_child_pipeline.yml

@@ -153,7 +153,7 @@ ESP-MQTT 库将始终重新传输未确认的 QoS 1 和 2 发布消息，以避�
 可以通过 :cpp:class:`authentication <esp_mqtt_client_config_t::credentials_t::authentication_t>` 字段设置认证参数。客户端支持以下认证方式：
 
  * :cpp:member:`password <esp_mqtt_client_config_t::credentials_t::authentication_t::password>`：使用密码
- * * :cpp:member:`certificate <esp_mqtt_client_config_t::credentials_t::authentication_t::certificate>` 和 :cpp:member:`key <esp_mqtt_client_config_t::credentials_t::authentication_t::key>`：进行双向 TLS 身份验证，PEM 或 DER 格式均可
+ * :cpp:member:`certificate <esp_mqtt_client_config_t::credentials_t::authentication_t::certificate>` 和 :cpp:member:`key <esp_mqtt_client_config_t::credentials_t::authentication_t::key>`：进行双向 TLS 身份验证，PEM 或 DER 格式均可
  * :cpp:member:`use_secure_element <esp_mqtt_client_config_t::credentials_t::authentication_t::use_secure_element>`：使用 ESP32 系列中的安全元素 (ATECC608A)
  * :cpp:member:`ds_data <esp_mqtt_client_config_t::credentials_t::authentication_t::ds_data>`：使用某些乐鑫设备的数字签名外设
 
@@ -186,6 +186,24 @@ ESP-MQTT 库将始终重新传输未确认的 QoS 1 和 2 发布消息，以避�
 - :ref:`CONFIG_MQTT_TRANSPORT_SSL` 和 :ref:`CONFIG_MQTT_TRANSPORT_WEBSOCKET`：启用特定 MQTT 传输层，例如 SSL、WEBSOCKET 和 WEBSOCKET_SECURE
 
 - :ref:`CONFIG_MQTT_CUSTOM_OUTBOX`：禁用 mqtt_outbox 默认实现，因此可以提供特定实现
+
+内存分配位置
+^^^^^^^^^^^^^^^^
+
+在具有外部 RAM（PSRAM）的芯片上，可以将客户端占用内存最多的部分从内部 RAM 移出：
+
+- :ref:`CONFIG_MQTT_OUTBOX_DATA_ON_EXTERNAL_MEMORY`：将 outbox 中保存的消息负载分配在外部内存中。
+
+- :ref:`CONFIG_MQTT_BUFFERS_ON_EXTERNAL_MEMORY`：将客户端的输入和输出缓冲区（大小由
+  :cpp:member:`buffer.size <esp_mqtt_client_config_t::buffer_t::size>` 和
+  :cpp:member:`buffer.out_size <esp_mqtt_client_config_t::buffer_t::out_size>` 决定）分配在外部内存中。
+
+- :ref:`CONFIG_MQTT_TASK_STACK_ON_EXTERNAL_MEMORY`：将 MQTT 任务栈分配在外部内存中。任务控制块始终位于内部
+  RAM 中。该选项需要启用 :ref:`CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM`。
+
+flash cache 被禁用时无法访问外部内存。因此，当任务栈位于外部内存中时，MQTT 任务不能执行任何会禁用 cache 的代码：
+不允许在 MQTT 任务上下文中进行 flash 和 NVS 操作，也不允许进入 deep sleep 或 light sleep。这也包括由 MQTT
+任务分发的事件处理函数中运行的用户代码。
 
 
 事件

@@ -1,12 +1,5 @@
-.add_gh_key_remote: &add_gh_key_remote |
-    curl -sSL ${CIT_LOADER_URL} | sh
-    source citools/import_functions
-    cit_add_ssh_key "${GH_PUSH_KEY}"
-    git remote remove github || true
-    git remote add github ${GH_PUSH_REPO}
-
 host_tests:
-    image: espressif/idf:latest
+    image: espressif/idf:release-v6.0
     stage: test
     tags: [build]
     timeout: 1h
@@ -15,6 +8,7 @@ host_tests:
     needs: []
     artifacts:
         paths:
+            - "**/build*/build.log"
             - "**/coverage.xml"
             - "**/coverage.html"
         expire_in: 1 week
@@ -25,26 +19,22 @@ host_tests:
                 coverage_format: cobertura
                 path: "**/coverage.xml"
     before_script:
-        - pip install -U gcovr 'idf-ci<1'
-    script:
-        - idf-ci build run -t linux -p test/host
-        - cd test/host
-        - ./build_linux_coverage/host_mqtt_client_test.elf -r junit -o junit.xml
-        - cd ../..
-        - gcovr --gcov-ignore-parse-errors -g -k -r . --html coverage.html -x coverage.xml
-
-check_remotes_sync:
-    stage: test_deploy
-    image: espressif/idf:latest
-    tags:
-        - build
-        - internet
-    needs: []
-    except:
-        - master
-        - idf
-    script:
-        - *add_gh_key_remote
-        - git fetch --depth=1 origin master
-        - git fetch --depth=1 github master
-        - test "$(git rev-parse origin/master)" == "$(git rev-parse github/master)"
+        - pip install -U gcovr 'idf-ci>=1,<2'
+    script: |
+        set -euo pipefail
+        ORIG_DIR="${CI_PROJECT_DIR:-$(pwd)}"
+        cd "${ORIG_DIR}"
+        echo "Original dir: $(pwd)"
+        rm -rf mqtt
+        git worktree add --force mqtt HEAD || (echo "Worktree failed; using local clone" && git clone --local --no-hardlinks . mqtt)
+        git worktree list || true
+        cd mqtt
+        idf-ci build run -t linux -p test
+        cd test/host
+        ./build_linux_coverage/host_mqtt_client_test.elf -r junit -o junit.xml
+        cd ../mqtt_utils_host_test
+        ./build_linux_default/mqtt_utils_host_test.elf
+        cd ../mqtt_outbox_host_test
+        ./build_linux_coverage/mqtt_outbox_host_test.elf
+        cd ../..
+        gcovr --gcov-ignore-parse-errors -g -k -r . --html coverage.html -x coverage.xml
