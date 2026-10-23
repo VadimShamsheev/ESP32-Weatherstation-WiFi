@@ -52,8 +52,8 @@ static esp_err_t read_dht_native(float *humidity, float *temperature) {
         raw_temperature = -(raw_temperature & 0x7FFF);
     }
 
-    *humidity = raw_humidity / 10;
-    *temperature = raw_temperature / 10;
+    *humidity = raw_humidity / 10.0f;
+    *temperature = raw_temperature / 10.0f;
 
     return ESP_OK;
 }

@@ -1,3 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
+# Use the same target and configuration for native ESP-IDF and PlatformIO builds.
+if(NOT DEFINED IDF_TARGET)
+    set(IDF_TARGET esp32c3)
+endif()
+if(NOT DEFINED SDKCONFIG)
+    set(SDKCONFIG "${CMAKE_SOURCE_DIR}/sdkconfig.esp32-c3-devkitm-1")
+endif()
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(weather-station)

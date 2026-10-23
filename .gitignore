@@ -3,3 +3,29 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# ESP-IDF build output and downloaded components
+/build/
+/build-*/
+/managed_components/
+
+# Local configuration backups (keep sdkconfig and dependencies.lock)
+sdkconfig.old
+sdkconfig.*.old
+
+# Source backups
+*.backup-*
+*.backup.*
+*.bak
+*~
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini

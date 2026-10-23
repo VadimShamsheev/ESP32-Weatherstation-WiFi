@@ -9,12 +9,14 @@
 #include "esp_event.h"
 //#include "esp_netif.h"
 #include "esp_log.h"
-#include "mqtt_client.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_sleep.h"
+#include "esp_timer.h"
+#include "freertos/semphr.h"
+#include "nvs.h"
 #include "esp_adc/adc_oneshot.h"
 
 // Библиотеки для работы с дисплеем
@@ -69,7 +71,7 @@ typedef struct {
     watering_mode_t mode;
     int threshold_moisture; // в процентах (например, 30%)
     uint32_t interval_hours; 
-    uint32_t ms_since_last_water;
+    uint64_t ms_since_last_water;
     int pump_time_ms;       // время работы помпы после 1 сек давления
 } plant_config_t;
 
@@ -136,7 +138,9 @@ int get_moisture_raw(adc_channel_t channel) {
 }
 
 int get_moisture_percent(adc_channel_t channel) {
-    return (MIN_HUMIDITY_ADC - get_moisture_raw(channel)) / 2150;
+    int percent = (MIN_HUMIDITY_ADC - get_moisture_raw(channel)) * 100 /
+                  (MIN_HUMIDITY_ADC - MAX_HUMIDITY_ADC);
+    return percent < 0 ? 0 : (percent > 100 ? 100 : percent);
 }
 
 /*
@@ -220,9 +224,9 @@ void oled_clear(void) {
     int y - координата у (от 1 до 64)
     char c - символ, который нужно вывести
 */
-void oled_draw_char(int x, int y, char c) {
+void oled_draw_char(int x, int y, wchar_t c) {
     const uint8_t *symbol = get_font_bytes_array((wchar_t)c);
-    ESP_LOGI(DISPLAY_TAG, "Найденный символ %hhd", symbol[0]);
+    if (!symbol) symbol = get_font_bytes_array(L' ');
     for (int i = 0; i < 5; i++) {
         uint8_t line = symbol[i];
         for (int j = 0; j < 8; j++) {
@@ -267,10 +271,16 @@ void oled_draw_char(int x, int y, char c) {
     const char *str - строка, которая будет выведена на экран
 */
 void oled_print_string(int x, int y, const char *str) {
-    while (*str) {
-        oled_draw_char(x, y, *str);
+    const unsigned char *text = (const unsigned char *)str;
+    while (*text && x <= 122) {
+        wchar_t c = *text++;
+        if ((c & 0xE0) == 0xC0 && (*text & 0xC0) == 0x80) {
+            c = ((c & 0x1F) << 6) | (*text++ & 0x3F);
+        } else if (c >= 0x80) {
+            c = L' ';
+        }
+        oled_draw_char(x, y, c);
         x += 6;
-        str++;
     }
 }
 
@@ -307,307 +317,239 @@ void display_weather_data(float temp, float hum) {
     oled_flush();
 }
 
-void water_plant(int pump_pin, int watering_duration_ms) {
-    gpio_set_level(pump_pin, 1);
-    
-    // 1 секунда на нагнетание давления + время самого полива
-    vTaskDelay(pdMS_TO_TICKS(1000 + watering_duration_ms)); 
-    
-    gpio_set_level(pump_pin, 0);
+static SemaphoreHandle_t config_mutex;
+static const int buttons[] = {BUTTON_1, BUTTON_2, BUTTON_3, BUTTON_4};
+
+static uint64_t interval_ms(const plant_config_t *plant) {
+    return (uint64_t)plant->interval_hours * 3600000ULL;
 }
 
-void watering_task(void *pvParameters) {
-    gpio_reset_pin(PUMP_1_PIN);
-    gpio_set_direction(PUMP_1_PIN, GPIO_MODE_OUTPUT);
-    gpio_reset_pin(PUMP_2_3_PIN);
-    gpio_set_direction(PUMP_2_3_PIN, GPIO_MODE_OUTPUT);
+static bool valid_config(const plant_config_t *p) {
+    return (p->mode == WATERING_MODE_INTERVAL || p->mode == WATERING_MODE_MOISTURE) &&
+        p->threshold_moisture >= 0 && p->threshold_moisture <= 100 &&
+        p->interval_hours >= 24 && p->interval_hours <= 365 * 24 &&
+        p->pump_time_ms > 0 && p->pump_time_ms <= 60000;
+}
 
-    while(1) {
-        // Чтение АЦП с пинов влажности 1 и 0 (требуется настройка ADC1)
-        moisture1 = get_moisture_percent(ADC_CHANNEL_0);
-        moisture2 = get_moisture_percent(ADC_CHANNEL_1); 
-        
-        // Логика проверки условий полива для первого растения
-        if ((plant1.mode == WATERING_MODE_MOISTURE && moisture1 < plant1.threshold_moisture && plant1.ms_since_last_water >= 600000) || 
-            (plant1.mode = WATERING_MODE_INTERVAL && plant1.ms_since_last_water >= plant1.interval_hours * 60 * 60 * 1000)) {
-            water_plant(PUMP_1_PIN, plant1.pump_time_ms);
-            plant1.ms_since_last_water = 0;
+static void load_settings(void) {
+    nvs_handle_t handle;
+    if (nvs_open("watering", NVS_READONLY, &handle) != ESP_OK) return;
+    plant_config_t *plants[] = {&plant1, &plant2};
+    const char *keys[] = {"plant1", "plant2"};
+    for (int i = 0; i < 2; ++i) {
+        plant_config_t saved;
+        size_t size = sizeof(saved);
+        if (nvs_get_blob(handle, keys[i], &saved, &size) == ESP_OK &&
+            size == sizeof(saved) && valid_config(&saved)) {
+            saved.ms_since_last_water = 0;
+            *plants[i] = saved;
         }
-        if ((plant2.mode == WATERING_MODE_MOISTURE && moisture2 < plant2.threshold_moisture && plant2.ms_since_last_water >= 600000) ||
-            (plant2.mode = WATERING_MODE_INTERVAL && plant2.ms_since_last_water >= plant2.interval_hours * 60 * 60 * 1000)) {
-            water_plant(PUMP_2_3_PIN, plant2.pump_time_ms);
-            plant2.ms_since_last_water = 0;
-        }
+    }
+    nvs_close(handle);
+}
 
-        // Обновление счетчиков времени с использованием внутренних часов (TickCount)
-        vTaskDelay(pdMS_TO_TICKS(60000)); // Проверка раз в минуту
-        plant1.ms_since_last_water += 60000;
-        plant2.ms_since_last_water += 60000;
+static esp_err_t save_settings(void) {
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open("watering", NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+    plant_config_t saved = plant_settings_buffer;
+    saved.ms_since_last_water = 0;
+    err = nvs_set_blob(handle, selected_plant == &plant1 ? "plant1" : "plant2", &saved, sizeof(saved));
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+    if (err == ESP_OK) {
+        saved.ms_since_last_water = selected_plant->ms_since_last_water;
+        *selected_plant = saved;
+    }
+    return err;
+}
+
+static void watering_task(void *arg) {
+    int64_t last_poll = esp_timer_get_time();
+    for (;;) {
+        int m1 = get_moisture_percent(ADC_CHANNEL_0);
+        int m2 = get_moisture_percent(ADC_CHANNEL_1);
+        int64_t now = esp_timer_get_time();
+        xSemaphoreTake(config_mutex, portMAX_DELAY);
+        moisture1 = m1;
+        moisture2 = m2;
+        uint64_t elapsed = (now - last_poll) / 1000;
+        plant1.ms_since_last_water += elapsed;
+        plant2.ms_since_last_water += elapsed;
+        last_poll = now;
+        xSemaphoreGive(config_mutex);
+        plant_config_t *plants[] = {&plant1, &plant2};
+        const int pins[] = {PUMP_1_PIN, PUMP_2_3_PIN};
+        const int moisture[] = {m1, m2};
+        for (int i = 0; i < 2; ++i) {
+            xSemaphoreTake(config_mutex, portMAX_DELAY);
+            plant_config_t p = *plants[i];
+            bool due = (p.mode == WATERING_MODE_MOISTURE &&
+                        moisture[i] < p.threshold_moisture && p.ms_since_last_water >= 600000) ||
+                       (p.mode == WATERING_MODE_INTERVAL && p.ms_since_last_water >= interval_ms(&p));
+            xSemaphoreGive(config_mutex);
+            if (due) {
+                gpio_set_level(pins[i], 1);
+                vTaskDelay(pdMS_TO_TICKS(1000 + p.pump_time_ms));
+                gpio_set_level(pins[i], 0);
+                xSemaphoreTake(config_mutex, portMAX_DELAY);
+                // The next poll adds time since last_poll; subtract the part before completion.
+                plants[i]->ms_since_last_water = 0;
+                int64_t finished = esp_timer_get_time();
+                uint64_t delta = (finished - last_poll) / 1000;
+                plants[1-i]->ms_since_last_water += delta;
+                last_poll = finished;
+                xSemaphoreGive(config_mutex);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(60000));
     }
 }
 
-/*
-    Таск, следящий за нажатием кнопки
-*/
-void button_poling_task(void *pvParameters) {
-    // Инициализация пинов кнопок: 7, 6, 2, 10
-    const int btns[] = {7, 6, 2, 10}; 
-    for(int i=0; i<4; i++) {
-        gpio_reset_pin(btns[i]);
-        gpio_set_direction(btns[i], GPIO_MODE_INPUT);
-        gpio_set_pull_mode(btns[i], GPIO_PULLUP_ONLY);
+static void sensor_task(void *arg) {
+    for (;;) {
+        dht_update_current_values();
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
+}
 
+static void handle_button(int btn) {
     last_activity_time = xTaskGetTickCount();
-
-    while (1) {
-        bool any_pressed = false;
-        int pressed_btn = -1;
-
-        for(int i=0; i<4; i++) {
-            if (gpio_get_level(btns[i]) == 0) {
-                any_pressed = true;
-                pressed_btn = i;
-                break;
+    if (current_state == STATE_DISPLAY_OFF) {
+        current_state = STATE_MAIN_WINDOW;
+        esp_lcd_panel_disp_on_off(panel_handle, true);
+        return;
+    }
+    if (current_state == STATE_MAIN_WINDOW) {
+        if (btn == 0) current_state = STATE_SETTINGS_MENU;
+    } else if (current_state == STATE_SETTINGS_MENU) {
+        if (btn == 1) current_state = STATE_MAIN_WINDOW;
+        else if (btn == 2 || btn == 3) menu_cursor ^= 1;
+        else if (btn == 0) {
+            selected_plant = menu_cursor == 0 ? &plant1 : &plant2;
+            plant_settings_buffer = *selected_plant;
+            settings_edit_idx = 0;
+            is_editing = false;
+            current_state = menu_cursor == 0 ? STATE_PLANT1_SET : STATE_PLANT2_SET;
+        }
+    } else if (!is_editing) {
+        if (btn == 1) current_state = STATE_SETTINGS_MENU;
+        else if (btn == 2) settings_edit_idx = (settings_edit_idx + 3) % 4;
+        else if (btn == 3) settings_edit_idx = (settings_edit_idx + 1) % 4;
+        else if (btn == 0 && settings_edit_idx == 3) {
+            esp_err_t err = save_settings();
+            if (err == ESP_OK) current_state = STATE_SETTINGS_MENU;
+            else ESP_LOGE("settings", "Save failed: %s", esp_err_to_name(err));
+        } else if (btn == 0) is_editing = true;
+    } else {
+        if (btn == 0) is_editing = false;
+        else if (btn == 1) {
+            if (settings_edit_idx == 0) plant_settings_buffer.mode = selected_plant->mode;
+            if (settings_edit_idx == 1) plant_settings_buffer.threshold_moisture = selected_plant->threshold_moisture;
+            if (settings_edit_idx == 2) plant_settings_buffer.interval_hours = selected_plant->interval_hours;
+            is_editing = false;
+        } else {
+            int direction = btn == 2 ? 1 : -1;
+            if (settings_edit_idx == 0) plant_settings_buffer.mode ^= 1;
+            if (settings_edit_idx == 1) {
+                int value = plant_settings_buffer.threshold_moisture + direction * 5;
+                if (value >= 0 && value <= 100) plant_settings_buffer.threshold_moisture = value;
+            }
+            if (settings_edit_idx == 2) {
+                int value = (int)plant_settings_buffer.interval_hours + direction * 24;
+                if (value >= 24 && value <= 365 * 24) plant_settings_buffer.interval_hours = value;
             }
         }
+    }
+}
 
-        if (any_pressed) {
-            last_activity_time = xTaskGetTickCount(); // Сброс таймера сна
-            
-            if (current_state == STATE_DISPLAY_OFF) {
-                // Пробуждение: если были в настройках - сбрасываем на главную
-                current_state = STATE_MAIN_WINDOW;
-                esp_lcd_panel_disp_on_off(panel_handle, true);
-            } else {
-                // Обработка нажатий в зависимости от текущего меню
-                // btns[0] - Звездочка (ОК/Меню), btns[1] - Решетка (Отмена)
-                // btns[2] - Вверх, btns[3] - Вниз
-                if (pressed_btn == 0 && current_state == STATE_MAIN_WINDOW) {       // Открыть меню
-                    current_state = STATE_SETTINGS_MENU;
-                } else if (current_state == STATE_PLANT1_SET || current_state == STATE_PLANT2_SET) {    // Переключение настроек у конкретного растения
-                    if (!is_editing) {
-                        if (pressed_btn == 2) {
-                            if (settings_edit_idx == 3) {
-                                settings_edit_idx = 0;
-                            } else {
-                                settings_edit_idx++;
-                            }
-                        } else if (pressed_btn == 3) {
-                            if (settings_edit_idx == 0) {
-                                settings_edit_idx = 3;
-                            } else {
-                                settings_edit_idx--;
-                            }
-                        } else if (pressed_btn == 0) {
-                            is_editing = true;
-                        }
-                    } else {
-                        if (settings_edit_idx == 0) {
-                            if (pressed_btn == 2 || pressed_btn == 3) {
-                                plant_settings_buffer.mode = (plant_settings_buffer.mode == WATERING_MODE_INTERVAL) ? WATERING_MODE_MOISTURE : WATERING_MODE_INTERVAL;
-                            } else if (pressed_btn == 1) {
-                                plant_settings_buffer.mode = selected_plant->mode;
-                                is_editing = false;
-                            } else if (pressed_btn == 0) {
-                                is_editing = false;
-                            }
-                        } else if (settings_edit_idx == 1) {          // Настройка порога влажности почвы
-                            if (pressed_btn == 2) { 
-                                if (plant_settings_buffer.threshold_moisture < 100) plant_settings_buffer.threshold_moisture += 5;
-                            } else if (pressed_btn == 3) {
-                                if (plant_settings_buffer.threshold_moisture > 0) plant_settings_buffer.threshold_moisture -= 5;
-                            } else if (pressed_btn == 1) {
-                                plant_settings_buffer.threshold_moisture = selected_plant->threshold_moisture;
-                                is_editing = false;
-                            } else if (pressed_btn == 0) {
-                                is_editing = false;
-                            }
-                        } else if (settings_edit_idx == 2) {      // Настройка интервала полива
-                            if (pressed_btn == 2) {
-                                if (plant_settings_buffer.interval_hours < (365*24)) plant_settings_buffer.interval_hours += 24;
-                            } else if (pressed_btn == 3) {
-                                if (plant_settings_buffer.interval_hours >= 24) plant_settings_buffer.interval_hours -= 24;
-                            } else if (pressed_btn == 1) {
-                                plant_settings_buffer.interval_hours = selected_plant->interval_hours;
-                                is_editing = false;
-                            } else if (pressed_btn == 0) {
-                                is_editing = false;
-                            }
-                        }
-                    }
-                    if (settings_edit_idx == 3 && pressed_btn == 0) {
-                        *selected_plant = plant_settings_buffer;
-                        is_editing = false;
-                    }
-                } else if (pressed_btn == 1 && current_state != STATE_MAIN_WINDOW) {    // Кнопка отмены
-                    current_state = (current_state == STATE_SETTINGS_MENU) ? STATE_MAIN_WINDOW : STATE_SETTINGS_MENU;  
-                    is_editing = false;                  
-                } else if (current_state == STATE_SETTINGS_MENU) {  
-                    if (pressed_btn == 2 || pressed_btn == 3) menu_cursor = (menu_cursor ^ 1);      // Переключение в настройках 
-                } else if (pressed_btn == 0 && current_state == STATE_SETTINGS_MENU) {         // Войти в настройки конкретного растения
-                    current_state = (menu_cursor == 0) ? STATE_PLANT1_SET : STATE_PLANT2_SET;
-                }
-            }
-            vTaskDelay(pdMS_TO_TICKS(200)); // Антидребезг
+static void draw_ui(void) {
+    char buf[96];
+    oled_buffer_clear();
+    if (current_state == STATE_MAIN_WINDOW) {
+        oled_print_string(30, 0, "статус");
+        plant_config_t plants[] = {plant1, plant2};
+        int values[] = {moisture1, moisture2};
+        for (int i = 0; i < 2; ++i) {
+            snprintf(buf, sizeof(buf), "р%d: %d%%", i + 1, values[i]);
+            oled_print_string(0, 12 + i * 20, buf);
+            if (plants[i].mode == WATERING_MODE_INTERVAL) {
+                uint64_t period = interval_ms(&plants[i]);
+                uint64_t left = plants[i].ms_since_last_water >= period ? 0 : period - plants[i].ms_since_last_water;
+                snprintf(buf, sizeof(buf), "полив через: %luч", (unsigned long)((left + 3599999) / 3600000));
+            } else snprintf(buf, sizeof(buf), "режим: влажность");
+            oled_print_string(0, 22 + i * 20, buf);
         }
-
-        // Проверка таймаута бездействия (60 секунд)
-        if (current_state != STATE_DISPLAY_OFF && 
-           (xTaskGetTickCount() - last_activity_time > pdMS_TO_TICKS(60000))) {
-            current_state = STATE_DISPLAY_OFF;
-            esp_lcd_panel_disp_on_off(panel_handle, false); // Отключение экрана
+        snprintf(buf, sizeof(buf), "%.1f'с  %.1f%%", current_temperature, current_humidity);
+        oled_print_string(0, 54, buf);
+    } else if (current_state == STATE_SETTINGS_MENU) {
+        oled_print_string(35, 0, "меню");
+        for (int i = 0; i < 2; ++i) {
+            snprintf(buf, sizeof(buf), "%s %d. растение %d", menu_cursor == i ? ">" : " ", i+1, i+1);
+            oled_print_string(0, 15 + i*12, buf);
         }
-
-        vTaskDelay(pdMS_TO_TICKS(30));
-    }
-}
-
-// Функция отрисовки главной страницы
-void draw_main_page() {
-    char buf[32];
-    oled_buffer_clear();
-
-    oled_print_string(30, 0, "статус");
-
-    // Информации по растению 1 (заглушки значений нужно заменить на реальные переменные)
-    // Пример влажности
-    int hours_left1 = (plant1.ms_since_last_water - plant1.interval_hours * 60 * 60 * 1000) / 3600000; // Пример оставшегося времени
-    
-    snprintf(buf, sizeof(buf), "р1: %d%%", moisture1);
-    oled_print_string(0, 12, buf);
-    
-    if (plant1.mode == WATERING_MODE_INTERVAL) {
-        
-        snprintf(buf, sizeof(buf), "полив через: %dч", hours_left1);
     } else {
-        snprintf(buf, sizeof(buf), "режим: влажность");
+        snprintf(buf, sizeof(buf), "растение %d", selected_plant == &plant1 ? 1 : 2);
+        oled_print_string(10, 0, buf);
+        for (int i = 0; i < 4; ++i) {
+            if (i == 0) snprintf(buf, sizeof(buf), "режим: %s", plant_settings_buffer.mode == WATERING_MODE_INTERVAL ? "интервал" : "влажн");
+            if (i == 1) snprintf(buf, sizeof(buf), "мин влаж: %d%%", plant_settings_buffer.threshold_moisture);
+            if (i == 2) snprintf(buf, sizeof(buf), "интервал: %luч", (unsigned long)plant_settings_buffer.interval_hours);
+            if (i == 3) snprintf(buf, sizeof(buf), "сохранить");
+            oled_print_string(12, 15 + i*12, buf);
+            if (settings_edit_idx == i) oled_print_string(0, 15 + i*12, ">");
+            if (settings_edit_idx == i && is_editing) oled_print_string(120, 15 + i*12, "*");
+        }
     }
-    oled_print_string(0, 22, buf);
-
-    // Информация по растению 2
-    int moist2 = 30; 
-    int hours_left2 = 2;
-    
-    snprintf(buf, sizeof(buf), "р2: %d%%", moist2);
-    oled_print_string(0, 32, buf);
-    
-    if (plant2.mode == WATERING_MODE_INTERVAL) {
-        snprintf(buf, sizeof(buf), "полив через: %dч", hours_left2);
-    } else {
-        snprintf(buf, sizeof(buf), "режим: влажность");
-    }
-    oled_print_string(0, 42, buf);
-
-    dht_update_current_values();
-    snprintf(buf, sizeof(buf), "%f'с   %f%%", current_temperature, current_humidity);
-    oled_print_string(0, 54, buf);
-
     oled_flush();
 }
 
-// Функция отрисовки меню настроек
-void draw_settings_menu() {
-    oled_buffer_clear();
-    
-    oled_print_string(35, 0, "меню");
-
-    // Отрисовка пунктов с курсором
-    if (menu_cursor == 0) oled_print_string(0, 15, "> 1. растение 1");
-    else oled_print_string(0, 15, "  1. растение 1");
-
-    if (menu_cursor == 1) oled_print_string(0, 27, "> 2. растение 2");
-    else oled_print_string(0, 27, "  2. растение 2");
-
-    oled_flush();
-}
-
-// Функция отрисовки окна настройки полива (конкретное растение)
-void draw_plant_settings() {
-    char buf[32];
-    oled_buffer_clear();
-    
-    oled_print_string(10, 0, "растение 1");
-
-    // Пункт 1: Режим
-    snprintf(buf, sizeof(buf), "режим: %s", selected_plant->mode == WATERING_MODE_INTERVAL ? "interval" : "moisture");
-    if (settings_edit_idx == 0) {
-        oled_print_string(0, 15, ">");
-        if (is_editing) oled_print_string(110, 15, "*"); // Звездочка показывает режим редактирования
-    }
-    oled_print_string(12, 15, buf);
-
-    // Пункт 2: Порог влажности
-    snprintf(buf, sizeof(buf), "мин влаж: %d%%", selected_plant->threshold_moisture);
-    if (settings_edit_idx == 1) {
-        oled_print_string(0, 27, ">");
-        if (is_editing) oled_print_string(110, 27, "*");
-    }
-    oled_print_string(12, 27, buf);
-
-    // Пункт 3: Интервал в часах
-    snprintf(buf, sizeof(buf), "интервал: %luч", selected_plant->interval_hours);
-    if (settings_edit_idx == 2) {
-        oled_print_string(0, 39, ">");
-        if (is_editing) oled_print_string(110, 39, "*");
-    }
-    oled_print_string(12, 39, buf);
-
-    snprintf(buf, sizeof(buf), "сохранить");
-    if (settings_edit_idx == 3) {
-        oled_print_string(0, 51, ">");
-    }
-    oled_print_string(12, 51, buf);
-
-
-    oled_flush();
-}
-
-void app_main(void) { 
-    // Инициализация памяти NVS
+void app_main(void) {
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-
-    // Запуск задачи для проверки состояния кнопок
-    xTaskCreate(button_poling_task, "button_task", 2048, NULL, 5, NULL);
-    
+    load_settings();
+    config_mutex = xSemaphoreCreateMutex();
+    configASSERT(config_mutex);
+    int pumps[] = {PUMP_1_PIN, PUMP_2_3_PIN};
+    for (int i = 0; i < 2; ++i) {
+        gpio_reset_pin(pumps[i]);
+        gpio_set_level(pumps[i], 0);
+        gpio_set_direction(pumps[i], GPIO_MODE_OUTPUT);
+    }
+    for (int i = 0; i < 4; ++i) {
+        gpio_reset_pin(buttons[i]);
+        gpio_set_direction(buttons[i], GPIO_MODE_INPUT);
+        gpio_set_pull_mode(buttons[i], GPIO_PULLUP_ONLY);
+    }
     init_display();
     oled_clear();
-
     init_adc();
-
-    // Ожидаем инициализации датчика и дисплея
-    vTaskDelay(pdMS_TO_TICKS(5000));
-
-    while (1) {
-        if (current_state != STATE_DISPLAY_OFF) {
-            switch(current_state) {
-                case STATE_MAIN_WINDOW:
-                    draw_main_page();
-                    break;
-                case STATE_SETTINGS_MENU:
-                    draw_settings_menu();
-                    break;
-                case STATE_PLANT1_SET:
-                    selected_plant = &plant1;
-                    plant_settings_buffer = plant1;
-                    draw_plant_settings();
-                    break;
-                case STATE_PLANT2_SET:
-                    selected_plant = &plant2;
-                    plant_settings_buffer = plant2;
-                    draw_plant_settings();
-                    break;
-                default:
-                    break;
-            }
+    configASSERT(xTaskCreate(watering_task, "watering", 4096, NULL, 5, NULL) == pdPASS);
+    configASSERT(xTaskCreate(sensor_task, "dht", 3072, NULL, 4, NULL) == pdPASS);
+    last_activity_time = xTaskGetTickCount();
+    int previous = -1, stable = -1;
+    TickType_t changed = xTaskGetTickCount();
+    for (;;) {
+        int pressed = -1;
+        for (int i = 0; i < 4; ++i) if (gpio_get_level(buttons[i]) == 0) { pressed = i; break; }
+        TickType_t now = xTaskGetTickCount();
+        if (pressed != previous) { previous = pressed; changed = now; }
+        xSemaphoreTake(config_mutex, portMAX_DELAY);
+        if (now - changed >= pdMS_TO_TICKS(50) && stable != pressed) {
+            stable = pressed;
+            if (pressed >= 0) handle_button(pressed);
         }
-        
-        // Обновляем экран довольно часто для отзывчивости интерфейса
-        vTaskDelay(pdMS_TO_TICKS(100)); 
+        if (current_state != STATE_DISPLAY_OFF && now - last_activity_time >= pdMS_TO_TICKS(60000)) {
+            current_state = STATE_DISPLAY_OFF;
+            is_editing = false;
+            esp_lcd_panel_disp_on_off(panel_handle, false);
+        }
+        if (current_state != STATE_DISPLAY_OFF) draw_ui();
+        xSemaphoreGive(config_mutex);
+        vTaskDelay(pdMS_TO_TICKS(30));
     }
 }

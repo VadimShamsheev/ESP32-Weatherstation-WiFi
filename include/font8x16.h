@@ -76,41 +76,4 @@ const uint8_t* get_font_bytes_array(wchar_t c) {
     return NULL;
 }
 
-static int get_font_index(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    else {
-        switch (c) {
-            /*case '-':
-                return 10;
-                break;
-            case '.':
-                return 11;
-                break;
-            case ':':
-                return 12;
-                break;
-            case ' ':
-                return 13;
-                break;
-            case 'T':
-                return 14;
-                break;
-            case 'H':
-                return 15;
-                break;
-            case 'C':
-                return 16;
-                break;
-            case '%':
-                return 17;
-                break;*/
-            default:
-                return 13;
-        }
-    }
-}
-/*
-static int get_utf8_font_index(wchar_t c) {
-
-}*/
 #endif
